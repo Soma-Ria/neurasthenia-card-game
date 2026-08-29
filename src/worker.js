@@ -60,7 +60,7 @@ export class GameRoom {
         this.data={code:m.code,hostId:m.playerId,phase:'lobby',turnId:null,turnLocked:false,players:[],
           settings:{rule:'normal',joker:'off',jokerCount:1,direction:'cw',failTime:2,cards:[]},cards:[],
           penalties:{enabled:false,mode:'host',cards:[]},events:[]};
-        this.data.settings={...this.data.settings,...m.settings}; this.data.nextSettings=null; this.normalize(); this.rebuild(); this.addPlayer(m,true,false);
+        this.data.settings={...this.data.settings,...m.settings}; this.normalize(); this.rebuild(); this.addPlayer(m,true);
       }
       if(!this.data)this.data=await this.load();
       if(!this.data)throw Error('房间不存在，请确认邀请链接或房间号');
@@ -68,8 +68,9 @@ export class GameRoom {
       if(m.type==='join'){
         clearTimeout(this.disconnectTimers.get(m.playerId)); this.disconnectTimers.delete(m.playerId);
         if(!me){
+          if(this.data.phase!=='lobby')throw Error('游戏已经开始，暂时不能加入');
           if(this.data.players.length>=6)throw Error('房间已满（最多6人）');
-          this.addPlayer(m,false,this.data.phase!=='lobby');
+          this.addPlayer(m,false);
         }
       }
       me=this.data.players.find(p=>p.id===m.playerId);
@@ -80,10 +81,9 @@ export class GameRoom {
       }
       if(m.type==='name'){if(!me)throw Error('请先加入房间');me.name=(m.name||'玩家').slice(0,20)}
       if(m.type==='color'){if(!me)throw Error('请先加入房间');if(!Number.isInteger(m.color)||m.color<0||m.color>=16)throw Error('无效颜色');if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error('该颜色已被其他玩家使用');me.color=m.color}
-      if(m.type==='ready'){if(me&&!me.spectator)this.toggleReady(me)}
+      if(m.type==='ready'){if(me)this.toggleReady(me)}
       if(m.type==='settings')this.updateSettings(me,m.settings||{});
       if(m.type==='permissions')this.updatePermissions(me,m.permissions||{});
-      if(m.type==='spectator')this.setSpectator(me,m.playerId,!!m.spectator);
       if(m.type==='penalties')this.updatePenalties(me,m);
       if(m.type==='start')this.startGame(me);
       if(m.type==='end'){if(me?.id!==this.data.hostId)throw Error('只有房主可以结束');this.toLobby()}
@@ -93,37 +93,24 @@ export class GameRoom {
   }
   normalize(){
     const s=this.data.settings||{}; s.failTime=Math.min(10,Math.max(1,+s.failTime||2)); s.jokerCount=Math.min(4,Math.max(1,+s.jokerCount||1)); s.cards=Array.isArray(s.cards)?s.cards:[]; this.data.settings=s;
-    this.data.nextSettings=this.data.nextSettings&&typeof this.data.nextSettings==='object'?this.data.nextSettings:null;
     this.data.permissions=this.data.permissions||{players:{}};
     this.data.penalties=this.data.penalties||{enabled:false,mode:'host',cards:[]}; this.data.penalties.cards=this.data.penalties.cards||[]; this.data.penaltyCards=Array.isArray(this.data.penaltyCards)?this.data.penaltyCards:[];
     for(const p of this.data.players||[])this.normalizePlayer(p);
   }
-  normalizePlayer(p){p.ready=!!p.ready;p.spectator=!!p.spectator;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyEdit=!!p.penaltyEdit}
-  addPlayer(m,host,spectator=false){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false,spectator:!!spectator};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
+  normalizePlayer(p){p.ready=!!p.ready;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyEdit=!!p.penaltyEdit}
+  addPlayer(m,host){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
   removePlayer(pid){const i=this.data.players.findIndex(p=>p.id===pid);if(i>=0)this.data.players.splice(i,1);if(this.data.hostId===pid&&this.data.players.length)this.data.hostId=this.data.players[0].id}
   freeColor(w){const used=new Set(this.data.players.map(p=>p.color));if(Number.isInteger(w)&&w>=0&&w<16&&!used.has(w))return w;for(let i=0;i<16;i++)if(!used.has(i))return i;return 0}
   canEditMain(p){return !!p&&(p.id===this.data.hostId||p.cardEdit)}
   toggleReady(me){me.ready=!me.ready}
   updateSettings(me,s){
+    if(this.data.phase!=='lobby')throw Error('游戏开始后不能修改设置');
     const keys=['rule','joker','jokerCount','direction','failTime'];
-    if(this.data.phase!=='lobby'){
-      if(me?.id!==this.data.hostId)throw Error('只有房主可以修改游戏设置');
-      this.data.nextSettings={...(this.data.nextSettings||{}),...s};
-      return;
-    }
     if(Object.keys(s).some(k=>keys.includes(k))&&me?.id!==this.data.hostId)throw Error('只有房主可以修改游戏规则');
     if('cards' in s&&!this.canEditMain(me))throw Error('你没有修改公共区卡牌的权限');
     if('cards' in s)this.data.settings.cards=Array.isArray(s.cards)?s.cards:[];
     for(const k of keys)if(k in s)this.data.settings[k]=s[k];
     this.normalize(); this.rebuild();
-  }
-  setSpectator(me,targetId,spectator){
-    if(me?.id!==this.data.hostId)throw Error('只有房主可以调整观战状态');
-    const p=this.data.players.find(x=>x.id===targetId); if(!p)throw Error('玩家不存在');
-    p.spectator=!!spectator;
-    if(p.spectator&&this.data.turnId===p.id)this.nextTurn(p.id);
-    if(this.data.phase==='lobby'&&!p.spectator)p.ready=false;
-    if(!p.spectator&&this.data.phase==='playing'&&!this.data.turnId)this.data.turnId=p.id;
   }
   updatePermissions(me,perm){
     if(me?.id!==this.data.hostId||this.data.phase!=='lobby')throw Error('只有房主可设置权限');
@@ -161,11 +148,10 @@ export class GameRoom {
   shuffle(a){for(let i=a.length-1;i;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
   startGame(me){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以开始');
-    const active=this.data.players.filter(p=>!p.spectator);
-    if(active.length<1||active.some(p=>!p.ready))throw Error('还有游戏玩家没有准备');
+    if(this.data.players.length<1||this.data.players.some(p=>!p.ready))throw Error('还有玩家没有准备');
     if(this.data.cards.length<2)throw Error('至少需要2张公共牌');
-    this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
-    for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];if(!p.spectator)p.ready=true}
+    this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=this.data.players[0].id; this.data.events=[];
+    for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];p.ready=true}
     for(const c of this.data.cards){c.revealed=false;c.matched=false}
     this.data.penaltyCards=this.data.penalties.enabled?this.buildPenaltyBoard():[];
     this.shuffle(this.data.cards); this.shuffle(this.data.penaltyCards);
@@ -173,14 +159,12 @@ export class GameRoom {
   toLobby(){
     if(this.finishTimer){clearTimeout(this.finishTimer);this.finishTimer=null}
     this.data.phase='lobby';this.data.turnId=null;this.data.turnLocked=false;this.data.events=[];
-    if(this.data.nextSettings){ this.data.settings={...this.data.settings,...this.data.nextSettings}; this.data.nextSettings=null; this.normalize(); }
     for(const p of this.data.players){p.ready=false;p.score=0;p.acquired=[];p.debuffs=[]}
     this.data.cards=[];this.data.penaltyCards=[];this.rebuild();
   }
   addEvent(text,type='info'){this.data.events=[...(this.data.events||[]).slice(-2),{id:crypto.randomUUID(),text,type,at:Date.now()}]}
   addEventPersistent(text,type='info'){this.data.events=[...(this.data.events||[]).slice(-2),{id:crypto.randomUUID(),text,type,at:Date.now()}]}
   async flip(i,pid,area){
-    const player=this.data.players.find(x=>x.id===pid); if(player?.spectator)throw Error('观战玩家不能操作牌');
     if(this.data.phase!=='playing'||this.data.turnId!==pid)throw Error('还没轮到你');
     if(this.data.turnLocked)throw Error('请等待当前牌处理完成');
     const arr=area==='penalty'?this.data.penaltyCards:this.data.cards;
@@ -212,7 +196,7 @@ export class GameRoom {
     if(a.owner){if(a.owner===pid)p.score-=2;else{p.score+=1;const from=this.data.players.find(x=>x.id===a.owner);this.addEvent(`🎴 ${p.name} 夺走了 ${from?.name||'玩家'} 的 ${a.name||'角色牌'}`,'role');}}
   }
   applyPenalty(pid,c){const p=this.data.players.find(x=>x.id===pid);if(!p)return;p.debuffs.push({id:c.id,name:c.name||'惩罚',owner:c.owner||''});this.addEvent(`⚠️ ${p.name} 触发了 ${c.name||'惩罚'}`,'penalty')}
-  nextTurn(pid){const active=this.data.players.filter(p=>!p.spectator);if(!active.length){this.data.turnId=null;return}const n=active.findIndex(x=>x.id===pid);this.data.turnId=active[(n+1+active.length)%active.length].id}
+  nextTurn(pid){const n=this.data.players.findIndex(x=>x.id===pid);if(n>=0&&this.data.players.length)this.data.turnId=this.data.players[(n+1)%this.data.players.length].id}
   jokerMove(){
     const ps=this.data.players;if(ps.length<2)return;const dir=this.data.settings.direction,ids=ps.map(p=>p.id),packs=ps.map(p=>p.acquired||[]),debuffs=ps.map(p=>p.debuffs||[]),scores=ps.map(p=>p.score);let map=[];
     if(dir==='random'){const perm=[...Array(ps.length).keys()];this.shuffle(perm);map=perm}
@@ -226,8 +210,7 @@ export class GameRoom {
   }
   checkEnd(){
     if(this.data.phase!=='playing')return;
-    const activePlayers=this.data.players.filter(p=>!p.spectator);
-    if(this.data.settings.rule==='special'&&activePlayers.length===2){
+    if(this.data.settings.rule==='special'&&this.data.players.length===2){
       for(const p of this.data.players){
         const groups=new Set(this.data.cards.filter(c=>c.owner===p.id&&!c.joker).map(c=>c.group));
         if(groups.size&&[...groups].every(g=>this.data.cards.filter(c=>c.group===g).every(c=>c.matched)))return this.finishAfterDelay();
