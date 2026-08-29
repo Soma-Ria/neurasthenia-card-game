@@ -18,7 +18,7 @@
 <h2>准备阶段</h2>
 <div class="settings">
 <label>游戏规则<select id="rule"><option value="normal">普通规则</option><option value="special">角色规则</option></select></label>
-<label>鬼牌<select id="joker"><option value="off">关闭</option><option value="on">开启</option></select></label><label>失败展示<select id="failTime"><option value="1">1 秒</option><option value="2" selected>2 秒</option><option value="3">3 秒</option><option value="5">5 秒</option><option value="10">10 秒</option></select></label>
+<label>鬼牌<select id="joker"><option value="off">关闭</option><option value="on">开启</option></select></label><label id="jokerSettings" class="hidden">鬼牌数量<select id="jokerCount"><option value="1">1 张</option><option value="2">2 张</option><option value="3">3 张</option><option value="4">4 张</option></select></label><label>失败展示<select id="failTime"><option value="1">1 秒</option><option value="2" selected>2 秒</option><option value="3">3 秒</option><option value="5">5 秒</option><option value="10">10 秒</option></select></label>
 <label>鬼牌方向<select id="direction"><option value="cw">顺时针</option><option value="ccw">逆时针</option></select></label>
 </div>
 
@@ -42,7 +42,7 @@
 </section>
 
 <section id="game" class="hidden">
-<div id="turnBox" class="turnBox"><strong>🎯 当前回合：<span id="turn"></span></strong><span id="turnHint"></span></div><button id="endBtn" class="danger host">结束本局</button></div>
+<div id="turnBox" class="turnBox"><strong>🎯 当前回合：<span id="turn"></span></strong><span id="turnHint"></span><button id="endBtn" class="danger host">结束本局</button></div>
 <div id="scores" class="scores"></div><div id="board" class="board"></div>
 </section>
 
