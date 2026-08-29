@@ -65,6 +65,9 @@ export class GameRoom {
       }
       if(!this.data)this.data=await this.load();
       if(!this.data)throw Error('房间不存在，请确认邀请链接或房间号');
+      // 兼容 V5.x/V6.x 已存在的 Durable Object 房间数据。旧房间可能没有 penalties、permissions 等字段；
+      // 每次加载后都规范化，避免“没有惩罚牌就无法开始”这类状态依赖问题。
+      this.normalize();
       let me=this.data.players.find(p=>p.id===m.playerId);
       if(m.type==='join'){
         clearTimeout(this.disconnectTimers.get(m.playerId)); this.disconnectTimers.delete(m.playerId);
@@ -257,8 +260,21 @@ export class GameRoom {
   }
 
   finishAfterDelay(){
-    if(this.data.phase!=='playing')return;this.data.phase='ending';this.data.turnId=null;this.data.turnLocked=true;this.data.events=[];this.broadcast();
-    this.finishTimer=setTimeout(async()=>{if(!this.data)return;this.data.phase='finished';this.data.turnLocked=false;this.finishTimer=null;await this.save();this.broadcast()},5000);
+    if(this.data.phase!=='playing')return;
+    // 结算前 5 秒保持最后一轮的完整画面：保留当前回合、分数、翻开的牌和事件，
+    // 仅锁定操作，避免牌面或回合继续变化。
+    this.data.phase='ending';
+    this.data.turnLocked=true;
+    this.data.events=this.data.events||[];
+    this.broadcast();
+    this.finishTimer=setTimeout(async()=>{
+      if(!this.data)return;
+      this.data.phase='finished';
+      this.data.turnLocked=false;
+      this.finishTimer=null;
+      await this.save();
+      this.broadcast();
+    },5000);
   }
 }
 export default {async fetch(req,env){const u=new URL(req.url),parts=u.pathname.split('/'),code=parts[2];if(u.pathname.startsWith('/room/')&&code){const room=env.ROOM.get(env.ROOM.idFromName(code.toUpperCase()));if(parts[3]==='ws')return room.fetch(req);return env.ASSETS.fetch(new Request(new URL('/',req.url),req))}return env.ASSETS.fetch(req)}};
