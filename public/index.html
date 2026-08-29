@@ -1,1 +1,36 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>神经衰弱 · 联机版</title><link rel="stylesheet" href="/style.css"></head><body><main class="app"><header><div><h1>🃏 神经衰弱</h1><p>1～6人 · Cloudflare 联机版 V3</p></div><span id="conn" class="badge">未连接</span></header><section id="lobby" class="panel"><div id="home"><h2>在线游戏</h2><label>你的名字</label><input id="homeName" maxlength="20" value="玩家1"><div class="homeBtns"><button id="create" class="primary">创建房间</button><div class="join"><input id="roomInput" maxlength="6" placeholder="房间号"><button id="join">加入房间</button></div></div></div><div id="room" class="hidden"><div class="roomHead"><div><h2>房间 <b id="roomId"></b></h2><p>把下面链接发给朋友即可加入</p><input id="share" readonly></div><button id="copy">复制邀请链接</button></div><div id="players" class="players"></div><div id="hostSettings" class="settings hidden"><h3>游戏设置（房主）</h3><div class="two"><label>规则<select id="mode"><option value="normal">普通规则</option><option value="special">角色卡牌规则</option></select></label><label>鬼牌<select id="ghost"><option value="off">关闭</option><option value="on">开启</option></select></label><label>鬼牌数量<input id="ghostCount" type="number" min="1" value="1"></label><label>方向<select id="direction"><option value="cw">顺时针</option><option value="ccw">逆时针</option></select></label></div><p>卡牌组格式：名称 / 数量 / 类型 / 所属玩家。每组用一行表示。</p><textarea id="groups" rows="7"></textarea><small>示例：猫咪|2|normal|-1<br>角色A|2|player|0<br>角色B|2|player|1</small></div><div class="roomBtns"><button id="ready">准备</button><button id="start" class="primary hidden">开始游戏</button><button id="leave">离开</button></div></div></section><section id="game" class="panel hidden"><div class="gameTop"><div><b id="turn"></b><small id="remain"></small></div><div id="scores"></div></div><div id="board" class="board"></div><div id="message" class="message"></div></section></main><div id="toast"></div><script src="/game.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>神经衰弱 · 联机 V4</title><link rel="stylesheet" href="/style.css">
+</head><body>
+<header><div><h1>🃏 神经衰弱</h1><small id="status">未连接</small></div><button id="rulesBtn">游戏规则</button></header>
+<main>
+<section id="home" class="panel">
+<h2>开始游戏</h2><button id="createBtn" class="primary">创建房间</button>
+<div class="join"><input id="roomInput" placeholder="输入房间号" maxlength="8"><button id="joinBtn">加入房间</button></div>
+<div class="rules" id="homeRules"></div>
+</section>
+<section id="room" class="panel hidden">
+<div class="roomHead"><div>房间号 <b id="roomCode"></b></div><button id="copyBtn">复制邀请链接</button></div>
+<div id="players" class="players"></div>
+<section id="setup">
+<h2>准备阶段</h2>
+<div class="settings">
+<label>游戏规则<select id="rule"><option value="normal">普通规则</option><option value="special">角色规则</option></select></label>
+<label>鬼牌<select id="joker"><option value="off">关闭</option><option value="on">开启</option></select></label>
+<label>鬼牌方向<select id="direction"><option value="cw">顺时针</option><option value="ccw">逆时针</option></select></label>
+</div>
+<div class="box"><h3>我的颜色</h3><div id="colors" class="colors"></div></div>
+<div id="editor" class="box"><div class="editorHead"><h3>卡牌配置</h3><button id="addCard">＋ 添加卡牌</button></div>
+<div class="cardHeader"><span>名称</span><span>所属角色</span><span>数量</span><span></span></div><div id="cardRows"></div>
+<small>“数量”是这类卡牌的张数。角色规则下，所属角色的一对牌决定得分。</small></div>
+<div class="actions"><button id="readyBtn" class="primary">准备</button><button id="startBtn" class="primary host">开始游戏</button></div>
+<div class="rules" id="setupRules"></div>
+</section>
+<section id="game" class="hidden">
+<div class="gameHead"><strong>当前回合：<span id="turn"></span></strong><button id="endBtn" class="danger host">结束本局</button></div>
+<div id="scores" class="scores"></div><div id="board" class="board"></div>
+</section>
+</section></main>
+<div id="modal" class="modal hidden"><div class="modalCard"><button id="closeModal">×</button><div id="modalText"></div></div></div>
+<script src="/game.js"></script></body></html>
