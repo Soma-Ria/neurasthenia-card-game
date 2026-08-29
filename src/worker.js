@@ -5,7 +5,7 @@ export class GameRoom {
   }
   async load(){ if(!this.data) this.data=await this.state.storage.get('room'); return this.data; }
   async save(){ if(this.data) await this.state.storage.put('room',this.data); }
-  async broadcast(){ for(const ws of [...this.sockets]) this.sendState(ws); }
+  async broadcast(){ for(const ws of this.sockets) this.sendState(ws); }
   sendState(ws){
     if(ws.readyState!==1||!this.data)return;
     const d=structuredClone(this.data), pid=ws.playerId;
@@ -23,7 +23,6 @@ export class GameRoom {
     if(!card.hidden)return true;
     if(!pid)return false;
     if(pid===this.data.hostId)return true;
-    if(this.data.players.find(x=>x.id===pid)?.penaltyView===false)return false;
     const p=this.data.players.find(x=>x.id===pid); if(!p)return false;
     if(this.data.penalties.mode==='shared')return !!p.penaltyEdit;
     if(this.data.penalties.mode==='personal')return card.owner===pid||card.editorIds?.includes(pid);
@@ -34,7 +33,7 @@ export class GameRoom {
     if(u.pathname.endsWith('/ws')&&req.headers.get('Upgrade')==='websocket'){
       const pair=new WebSocketPair(),[client,server]=Object.values(pair); server.accept();
       this.sockets.add(server);
-      server.addEventListener('message',e=>{try{const m=JSON.parse(e.data);Promise.resolve(this.handle(server,m)).catch(err=>{try{server.send(JSON.stringify({type:'error',message:err?.message||String(err)}))}catch{}})}catch{try{server.send(JSON.stringify({type:'error',message:'消息格式无效'}))}catch{}}});
+      server.addEventListener('message',e=>{try{this.handle(server,JSON.parse(e.data))}catch{}});
       server.addEventListener('close',()=>this.onClose(server));
       server.addEventListener('error',()=>this.onClose(server));
       return new Response(null,{status:101,webSocket:client});
@@ -42,7 +41,7 @@ export class GameRoom {
     return new Response('GameRoom');
   }
   onClose(ws){
-    this.sockets.delete(ws); if(ws._closedHandled)return; ws._closedHandled=true; const pid=ws.playerId; if(!pid||!this.data)return;
+    this.sockets.delete(ws); const pid=ws.playerId; if(!pid||!this.data)return;
     clearTimeout(this.disconnectTimers.get(pid));
     const t=setTimeout(async()=>{
       this.disconnectTimers.delete(pid);
@@ -65,9 +64,6 @@ export class GameRoom {
       }
       if(!this.data)this.data=await this.load();
       if(!this.data)throw Error('房间不存在，请确认邀请链接或房间号');
-      // 兼容 V5.x/V6.x 已存在的 Durable Object 房间数据。旧房间可能没有 penalties、permissions 等字段；
-      // 每次加载后都规范化，避免“没有惩罚牌就无法开始”这类状态依赖问题。
-      this.normalize();
       let me=this.data.players.find(p=>p.id===m.playerId);
       if(m.type==='join'){
         clearTimeout(this.disconnectTimers.get(m.playerId)); this.disconnectTimers.delete(m.playerId);
@@ -84,7 +80,7 @@ export class GameRoom {
       }
       if(m.type==='name'){if(!me)throw Error('请先加入房间');me.name=(m.name||'玩家').slice(0,20)}
       if(m.type==='color'){if(!me)throw Error('请先加入房间');if(!Number.isInteger(m.color)||m.color<0||m.color>=16)throw Error('无效颜色');if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error('该颜色已被其他玩家使用');me.color=m.color}
-      if(m.type==='ready'){if(!me)throw Error('请先加入房间');if(this.data.phase!=='lobby')throw Error('游戏进行中不能修改准备状态');if(me.spectator)throw Error('观战玩家不能准备，请先返回游戏区');this.toggleReady(me)}
+      if(m.type==='ready'){if(me&&!me.spectator)this.toggleReady(me)}
       if(m.type==='settings')this.updateSettings(me,m.settings||{});
       if(m.type==='permissions')this.updatePermissions(me,m.permissions||{});
       if(m.type==='spectator')this.setSpectator(me,m.playerId,!!m.spectator);
@@ -92,8 +88,7 @@ export class GameRoom {
       if(m.type==='start')this.startGame(me);
       if(m.type==='end'){if(me?.id!==this.data.hostId)throw Error('只有房主可以结束');this.toLobby()}
       if(m.type==='flip')await this.flip(m.index,me?.id,m.area||'main');
-      const handled=['create','join','leave','name','color','ready','settings','permissions','spectator','penalties','start','end','flip'].includes(m.type);
-      if(handled){await this.save(); await this.broadcast(); try{ws.send(JSON.stringify({type:'ack',action:m.type}))}catch{}}
+      await this.save(); this.broadcast();
     }catch(e){try{ws.send(JSON.stringify({type:'error',message:e.message||String(e)}))}catch{}}
   }
   normalize(){
@@ -103,8 +98,8 @@ export class GameRoom {
     this.data.penalties=this.data.penalties||{enabled:false,mode:'host',cards:[]}; this.data.penalties.cards=this.data.penalties.cards||[]; this.data.penaltyCards=Array.isArray(this.data.penaltyCards)?this.data.penaltyCards:[];
     for(const p of this.data.players||[])this.normalizePlayer(p);
   }
-  normalizePlayer(p){p.ready=!!p.ready;p.spectator=!!p.spectator;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyView=p.penaltyView!==false;p.penaltyEdit=!!p.penaltyEdit}
-  addPlayer(m,host,spectator=false){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyView:true,penaltyEdit:false,spectator:!!spectator};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
+  normalizePlayer(p){p.ready=!!p.ready;p.spectator=!!p.spectator;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyEdit=!!p.penaltyEdit}
+  addPlayer(m,host,spectator=false){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false,spectator:!!spectator};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
   removePlayer(pid){const i=this.data.players.findIndex(p=>p.id===pid);if(i>=0)this.data.players.splice(i,1);if(this.data.hostId===pid&&this.data.players.length)this.data.hostId=this.data.players[0].id}
   freeColor(w){const used=new Set(this.data.players.map(p=>p.color));if(Number.isInteger(w)&&w>=0&&w<16&&!used.has(w))return w;for(let i=0;i<16;i++)if(!used.has(i))return i;return 0}
   canEditMain(p){return !!p&&(p.id===this.data.hostId||p.cardEdit)}
@@ -120,7 +115,7 @@ export class GameRoom {
     if('cards' in s&&!this.canEditMain(me))throw Error('你没有修改公共区卡牌的权限');
     if('cards' in s)this.data.settings.cards=Array.isArray(s.cards)?s.cards:[];
     for(const k of keys)if(k in s)this.data.settings[k]=s[k];
-    this.normalize();
+    this.normalize(); this.rebuild();
   }
   setSpectator(me,targetId,spectator){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以调整观战状态');
@@ -132,15 +127,9 @@ export class GameRoom {
   }
   updatePermissions(me,perm){
     if(me?.id!==this.data.hostId||this.data.phase!=='lobby')throw Error('只有房主可设置权限');
+    this.data.permissions={...this.data.permissions,...perm};
     const q=perm.players||{};
-    for(const p of this.data.players){
-      const v=q[p.id]; if(!v)continue;
-      if('cardView' in v)p.cardView=!!v.cardView;
-      if('cardEdit' in v)p.cardEdit=!!v.cardEdit;
-      if('penaltyView' in v)p.penaltyView=!!v.penaltyView;
-      if('penaltyEdit' in v)p.penaltyEdit=!!v.penaltyEdit;
-    }
-    this.data.permissions={players:Object.fromEntries(this.data.players.map(p=>[p.id,{cardView:p.cardView,cardEdit:p.cardEdit,penaltyView:p.penaltyView,penaltyEdit:p.penaltyEdit}]))};
+    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyEdit=!!q[p.id].penaltyEdit}}
   }
   updatePenalties(me,m){
     if(this.data.phase!=='lobby')throw Error('游戏开始后不能修改惩罚牌');
@@ -167,24 +156,14 @@ export class GameRoom {
     if(s.joker==='on')for(let i=0;i<Math.min(4,Math.max(1,+s.jokerCount||1));i++)this.data.cards.push({id:crypto.randomUUID(),group:`joker-${i}`,name:'鬼牌',owner:'',joker:true,revealed:false,matched:false});
   }
   buildPenaltyBoard(){
-    return (this.data.penalties.cards||[]).flatMap((c,g)=>Array.from({length:Math.max(1,+c.count||1)},()=>({...c,id:crypto.randomUUID(),group:`p-${g}`,revealed:false,matched:false,joker:false,penalty:true})));
+    return (this.data.penalties.cards||[]).flatMap((c,g)=>Array.from({length:Math.max(1,+c.count||1)},()=>({...c,id:crypto.randomUUID(),group:`p-${g}`,revealed:false,matched:false,joker:false})));
   }
-  hasPlayablePair(defs){return (defs||[]).some(c=>Math.max(1,+c.count||1)>=2)}
   shuffle(a){for(let i=a.length-1;i;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
   startGame(me){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以开始');
-    if(this.data.phase!=='lobby')throw Error('游戏已经开始或正在结算');
     const active=this.data.players.filter(p=>!p.spectator);
-    if(active.length<1)throw Error('至少需要1名游戏玩家；房主可以在观战状态下主持游戏');
-    const unready=active.filter(p=>!p.ready);
-    if(unready.length)throw Error(`还有 ${unready.length} 名游戏玩家没有准备`);
-    const cardDefs=this.data.settings.cards||[];
-    const mainHasPair=this.hasPlayablePair(cardDefs);
-    const penaltyHasPair=this.data.penalties.enabled && this.hasPlayablePair(this.data.penalties.cards||[]);
-    const jokerCount=Math.min(4,Math.max(1,+this.data.settings.jokerCount||1));
-    if(!mainHasPair && !penaltyHasPair && !(this.data.settings.joker==='on' && jokerCount>=2))throw Error('请至少添加一组可配对的卡牌（数量至少为2）');
-    // 只有真正开始游戏时才生成牌面，准备阶段修改卡牌不会反复重建内部牌组。
-    this.rebuild();
+    if(active.length<1||active.some(p=>!p.ready))throw Error('还有游戏玩家没有准备');
+    if(this.data.cards.length<2)throw Error('至少需要2张公共牌');
     this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
     for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];if(!p.spectator)p.ready=true}
     for(const c of this.data.cards){c.revealed=false;c.matched=false}
@@ -260,21 +239,8 @@ export class GameRoom {
   }
 
   finishAfterDelay(){
-    if(this.data.phase!=='playing')return;
-    // 结算前 5 秒保持最后一轮的完整画面：保留当前回合、分数、翻开的牌和事件，
-    // 仅锁定操作，避免牌面或回合继续变化。
-    this.data.phase='ending';
-    this.data.turnLocked=true;
-    this.data.events=this.data.events||[];
-    this.broadcast();
-    this.finishTimer=setTimeout(async()=>{
-      if(!this.data)return;
-      this.data.phase='finished';
-      this.data.turnLocked=false;
-      this.finishTimer=null;
-      await this.save();
-      this.broadcast();
-    },5000);
+    if(this.data.phase!=='playing')return;this.data.phase='ending';this.data.turnId=null;this.data.turnLocked=true;this.data.events=[];this.broadcast();
+    this.finishTimer=setTimeout(async()=>{if(!this.data)return;this.data.phase='finished';this.data.turnLocked=false;this.finishTimer=null;await this.save();this.broadcast()},5000);
   }
 }
 export default {async fetch(req,env){const u=new URL(req.url),parts=u.pathname.split('/'),code=parts[2];if(u.pathname.startsWith('/room/')&&code){const room=env.ROOM.get(env.ROOM.idFromName(code.toUpperCase()));if(parts[3]==='ws')return room.fetch(req);return env.ASSETS.fetch(new Request(new URL('/',req.url),req))}return env.ASSETS.fetch(req)}};
