@@ -89,7 +89,8 @@ export class GameRoom {
       if(m.type==='start')this.startGame(me);
       if(m.type==='end'){if(me?.id!==this.data.hostId)throw Error('只有房主可以结束');this.toLobby()}
       if(m.type==='flip')await this.flip(m.index,me?.id,m.area||'main');
-      await this.save(); this.broadcast();
+      const handled=['create','join','leave','name','color','ready','settings','permissions','spectator','penalties','start','end','flip'].includes(m.type);
+      if(handled){await this.save(); await this.broadcast(); try{ws.send(JSON.stringify({type:'ack',action:m.type}))}catch{}}
     }catch(e){try{ws.send(JSON.stringify({type:'error',message:e.message||String(e)}))}catch{}}
   }
   normalize(){
@@ -128,9 +129,15 @@ export class GameRoom {
   }
   updatePermissions(me,perm){
     if(me?.id!==this.data.hostId||this.data.phase!=='lobby')throw Error('只有房主可设置权限');
-    this.data.permissions={...this.data.permissions,...perm};
     const q=perm.players||{};
-    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyView=q[p.id].penaltyView!==false;p.penaltyEdit=!!q[p.id].penaltyEdit}}
+    for(const p of this.data.players){
+      const v=q[p.id]; if(!v)continue;
+      if('cardView' in v)p.cardView=!!v.cardView;
+      if('cardEdit' in v)p.cardEdit=!!v.cardEdit;
+      if('penaltyView' in v)p.penaltyView=!!v.penaltyView;
+      if('penaltyEdit' in v)p.penaltyEdit=!!v.penaltyEdit;
+    }
+    this.data.permissions={players:Object.fromEntries(this.data.players.map(p=>[p.id,{cardView:p.cardView,cardEdit:p.cardEdit,penaltyView:p.penaltyView,penaltyEdit:p.penaltyEdit}]))};
   }
   updatePenalties(me,m){
     if(this.data.phase!=='lobby')throw Error('游戏开始后不能修改惩罚牌');
@@ -157,8 +164,9 @@ export class GameRoom {
     if(s.joker==='on')for(let i=0;i<Math.min(4,Math.max(1,+s.jokerCount||1));i++)this.data.cards.push({id:crypto.randomUUID(),group:`joker-${i}`,name:'鬼牌',owner:'',joker:true,revealed:false,matched:false});
   }
   buildPenaltyBoard(){
-    return (this.data.penalties.cards||[]).flatMap((c,g)=>Array.from({length:Math.max(1,+c.count||1)},()=>({...c,id:crypto.randomUUID(),group:`p-${g}`,revealed:false,matched:false,joker:false})));
+    return (this.data.penalties.cards||[]).flatMap((c,g)=>Array.from({length:Math.max(1,+c.count||1)},()=>({...c,id:crypto.randomUUID(),group:`p-${g}`,revealed:false,matched:false,joker:false,penalty:true})));
   }
+  hasPlayablePair(defs){return (defs||[]).some(c=>Math.max(1,+c.count||1)>=2)}
   shuffle(a){for(let i=a.length-1;i;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
   startGame(me){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以开始');
@@ -168,8 +176,10 @@ export class GameRoom {
     const unready=active.filter(p=>!p.ready);
     if(unready.length)throw Error(`还有 ${unready.length} 名游戏玩家没有准备`);
     const cardDefs=this.data.settings.cards||[];
-    const total=cardDefs.reduce((n,c)=>n+Math.max(1,+c.count||1),0);
-    if(total<2)throw Error('至少需要2张公共牌');
+    const mainHasPair=this.hasPlayablePair(cardDefs);
+    const penaltyHasPair=this.data.penalties.enabled && this.hasPlayablePair(this.data.penalties.cards||[]);
+    const jokerCount=Math.min(4,Math.max(1,+this.data.settings.jokerCount||1));
+    if(!mainHasPair && !penaltyHasPair && !(this.data.settings.joker==='on' && jokerCount>=2))throw Error('请至少添加一组可配对的卡牌（数量至少为2）');
     // 只有真正开始游戏时才生成牌面，准备阶段修改卡牌不会反复重建内部牌组。
     this.rebuild();
     this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
