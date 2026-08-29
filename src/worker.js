@@ -34,7 +34,7 @@ export class GameRoom {
     if(u.pathname.endsWith('/ws')&&req.headers.get('Upgrade')==='websocket'){
       const pair=new WebSocketPair(),[client,server]=Object.values(pair); server.accept();
       this.sockets.add(server);
-      server.addEventListener('message',e=>{try{this.handle(server,JSON.parse(e.data))}catch{}});
+      server.addEventListener('message',e=>{try{const m=JSON.parse(e.data);Promise.resolve(this.handle(server,m)).catch(err=>{try{server.send(JSON.stringify({type:'error',message:err?.message||String(err)}))}catch{}})}catch{try{server.send(JSON.stringify({type:'error',message:'消息格式无效'}))}catch{}}});
       server.addEventListener('close',()=>this.onClose(server));
       server.addEventListener('error',()=>this.onClose(server));
       return new Response(null,{status:101,webSocket:client});
@@ -81,7 +81,7 @@ export class GameRoom {
       }
       if(m.type==='name'){if(!me)throw Error('请先加入房间');me.name=(m.name||'玩家').slice(0,20)}
       if(m.type==='color'){if(!me)throw Error('请先加入房间');if(!Number.isInteger(m.color)||m.color<0||m.color>=16)throw Error('无效颜色');if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error('该颜色已被其他玩家使用');me.color=m.color}
-      if(m.type==='ready'){if(!me)throw Error('请先加入房间');if(me.spectator)throw Error('观战玩家不能准备，请先返回游戏区');this.toggleReady(me)}
+      if(m.type==='ready'){if(!me)throw Error('请先加入房间');if(this.data.phase!=='lobby')throw Error('游戏进行中不能修改准备状态');if(me.spectator)throw Error('观战玩家不能准备，请先返回游戏区');this.toggleReady(me)}
       if(m.type==='settings')this.updateSettings(me,m.settings||{});
       if(m.type==='permissions')this.updatePermissions(me,m.permissions||{});
       if(m.type==='spectator')this.setSpectator(me,m.playerId,!!m.spectator);
