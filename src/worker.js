@@ -64,13 +64,18 @@ export class GameRoom {
       }
       if(!this.data)this.data=await this.load();
       if(!this.data)throw Error('房间不存在，请确认邀请链接或房间号');
+      // Always normalize persisted rooms so rooms created by older versions have all current fields.
+      this.normalize();
       let me=this.data.players.find(p=>p.id===m.playerId);
       if(m.type==='join'){
         clearTimeout(this.disconnectTimers.get(m.playerId)); this.disconnectTimers.delete(m.playerId);
         if(!me){
-          if(this.data.phase!=='lobby')throw Error('游戏已经开始，暂时不能加入');
           if(this.data.players.length>=6)throw Error('房间已满（最多6人）');
           this.addPlayer(m,false);
+          if(this.data.phase!=='lobby'){
+            me=this.data.players.find(p=>p.id===m.playerId);
+            if(me){me.spectator=true;me.ready=false;}
+          }
         }
       }
       me=this.data.players.find(p=>p.id===m.playerId);
@@ -98,7 +103,7 @@ export class GameRoom {
     for(const p of this.data.players||[])this.normalizePlayer(p);
   }
   normalizePlayer(p){p.ready=!!p.ready;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyEdit=!!p.penaltyEdit}
-  addPlayer(m,host){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
+  addPlayer(m,host){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),spectator:host?false:false,ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
   removePlayer(pid){const i=this.data.players.findIndex(p=>p.id===pid);if(i>=0)this.data.players.splice(i,1);if(this.data.hostId===pid&&this.data.players.length)this.data.hostId=this.data.players[0].id}
   freeColor(w){const used=new Set(this.data.players.map(p=>p.color));if(Number.isInteger(w)&&w>=0&&w<16&&!used.has(w))return w;for(let i=0;i<16;i++)if(!used.has(i))return i;return 0}
   canEditMain(p){return !!p&&(p.id===this.data.hostId||p.cardEdit)}
@@ -116,7 +121,7 @@ export class GameRoom {
     if(me?.id!==this.data.hostId||this.data.phase!=='lobby')throw Error('只有房主可设置权限');
     this.data.permissions={...this.data.permissions,...perm};
     const q=perm.players||{};
-    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyEdit=!!q[p.id].penaltyEdit}}
+    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyEdit=!!q[p.id].penaltyEdit;p.spectator=!!q[p.id].spectator}}
   }
   updatePenalties(me,m){
     if(this.data.phase!=='lobby')throw Error('游戏开始后不能修改惩罚牌');
@@ -148,10 +153,16 @@ export class GameRoom {
   shuffle(a){for(let i=a.length-1;i;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
   startGame(me){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以开始');
-    if(this.data.players.length<1||this.data.players.some(p=>!p.ready))throw Error('还有玩家没有准备');
-    if(this.data.cards.length<2)throw Error('至少需要2张公共牌');
-    this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=this.data.players[0].id; this.data.events=[];
-    for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];p.ready=true}
+    this.normalize();
+    const active=this.data.players.filter(p=>!p.spectator);
+    if(active.length<1)throw Error('至少需要1名游戏玩家，不能所有人都在观战区');
+    if(active.some(p=>!p.ready))throw Error('还有游戏玩家没有准备');
+    // Always build a fresh board from the preparation settings. Penalty cards are optional.
+    this.rebuild();
+    const playable=(this.data.cards||[]).reduce((n,c)=>n+(c.joker?0:1),0);
+    if(playable<2)throw Error('至少需要2张公共牌（数量合计）');
+    this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
+    for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[]}
     for(const c of this.data.cards){c.revealed=false;c.matched=false}
     this.data.penaltyCards=this.data.penalties.enabled?this.buildPenaltyBoard():[];
     this.shuffle(this.data.cards); this.shuffle(this.data.penaltyCards);
@@ -196,9 +207,9 @@ export class GameRoom {
     if(a.owner){if(a.owner===pid)p.score-=2;else{p.score+=1;const from=this.data.players.find(x=>x.id===a.owner);this.addEvent(`🎴 ${p.name} 夺走了 ${from?.name||'玩家'} 的 ${a.name||'角色牌'}`,'role');}}
   }
   applyPenalty(pid,c){const p=this.data.players.find(x=>x.id===pid);if(!p)return;p.debuffs.push({id:c.id,name:c.name||'惩罚',owner:c.owner||''});this.addEvent(`⚠️ ${p.name} 触发了 ${c.name||'惩罚'}`,'penalty')}
-  nextTurn(pid){const n=this.data.players.findIndex(x=>x.id===pid);if(n>=0&&this.data.players.length)this.data.turnId=this.data.players[(n+1)%this.data.players.length].id}
+  nextTurn(pid){const ps=this.data.players.filter(p=>!p.spectator);const n=ps.findIndex(x=>x.id===pid);if(n>=0&&ps.length)this.data.turnId=ps[(n+1)%ps.length].id}
   jokerMove(){
-    const ps=this.data.players;if(ps.length<2)return;const dir=this.data.settings.direction,ids=ps.map(p=>p.id),packs=ps.map(p=>p.acquired||[]),debuffs=ps.map(p=>p.debuffs||[]),scores=ps.map(p=>p.score);let map=[];
+    const ps=this.data.players.filter(p=>!p.spectator);if(ps.length<2)return;const dir=this.data.settings.direction,ids=ps.map(p=>p.id),packs=ps.map(p=>p.acquired||[]),debuffs=ps.map(p=>p.debuffs||[]),scores=ps.map(p=>p.score);let map=[];
     if(dir==='random'){const perm=[...Array(ps.length).keys()];this.shuffle(perm);map=perm}
     else{const d=dir==='cw'?1:-1;map=ps.map((_,k)=>(k-d+ps.length)%ps.length)}
     ps.forEach((p,k)=>{p.acquired=[...packs[map[k]]];p.debuffs=[...debuffs[map[k]]];p.score=scores[map[k]]});
@@ -211,7 +222,7 @@ export class GameRoom {
   checkEnd(){
     if(this.data.phase!=='playing')return;
     if(this.data.settings.rule==='special'&&this.data.players.length===2){
-      for(const p of this.data.players){
+      for(const p of this.data.players.filter(p=>!p.spectator)){
         const groups=new Set(this.data.cards.filter(c=>c.owner===p.id&&!c.joker).map(c=>c.group));
         if(groups.size&&[...groups].every(g=>this.data.cards.filter(c=>c.group===g).every(c=>c.matched)))return this.finishAfterDelay();
       }
