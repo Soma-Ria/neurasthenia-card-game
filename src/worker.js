@@ -81,7 +81,7 @@ export class GameRoom {
       }
       if(m.type==='name'){if(!me)throw Error('请先加入房间');me.name=(m.name||'玩家').slice(0,20)}
       if(m.type==='color'){if(!me)throw Error('请先加入房间');if(!Number.isInteger(m.color)||m.color<0||m.color>=16)throw Error('无效颜色');if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error('该颜色已被其他玩家使用');me.color=m.color}
-      if(m.type==='ready'){if(me&&!me.spectator)this.toggleReady(me)}
+      if(m.type==='ready'){if(!me)throw Error('请先加入房间');if(me.spectator)throw Error('观战玩家不能准备，请先返回游戏区');this.toggleReady(me)}
       if(m.type==='settings')this.updateSettings(me,m.settings||{});
       if(m.type==='permissions')this.updatePermissions(me,m.permissions||{});
       if(m.type==='spectator')this.setSpectator(me,m.playerId,!!m.spectator);
@@ -116,7 +116,7 @@ export class GameRoom {
     if('cards' in s&&!this.canEditMain(me))throw Error('你没有修改公共区卡牌的权限');
     if('cards' in s)this.data.settings.cards=Array.isArray(s.cards)?s.cards:[];
     for(const k of keys)if(k in s)this.data.settings[k]=s[k];
-    this.normalize(); this.rebuild();
+    this.normalize();
   }
   setSpectator(me,targetId,spectator){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以调整观战状态');
@@ -167,7 +167,11 @@ export class GameRoom {
     if(active.length<1)throw Error('至少需要1名游戏玩家；房主可以在观战状态下主持游戏');
     const unready=active.filter(p=>!p.ready);
     if(unready.length)throw Error(`还有 ${unready.length} 名游戏玩家没有准备`);
-    if(this.data.cards.length<2)throw Error('至少需要2张公共牌');
+    const cardDefs=this.data.settings.cards||[];
+    const total=cardDefs.reduce((n,c)=>n+Math.max(1,+c.count||1),0);
+    if(total<2)throw Error('至少需要2张公共牌');
+    // 只有真正开始游戏时才生成牌面，准备阶段修改卡牌不会反复重建内部牌组。
+    this.rebuild();
     this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
     for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];if(!p.spectator)p.ready=true}
     for(const c of this.data.cards){c.revealed=false;c.matched=false}
