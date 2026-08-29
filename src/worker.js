@@ -23,6 +23,7 @@ export class GameRoom {
     if(!card.hidden)return true;
     if(!pid)return false;
     if(pid===this.data.hostId)return true;
+    if(this.data.players.find(x=>x.id===pid)?.penaltyView===false)return false;
     const p=this.data.players.find(x=>x.id===pid); if(!p)return false;
     if(this.data.penalties.mode==='shared')return !!p.penaltyEdit;
     if(this.data.penalties.mode==='personal')return card.owner===pid||card.editorIds?.includes(pid);
@@ -98,8 +99,8 @@ export class GameRoom {
     this.data.penalties=this.data.penalties||{enabled:false,mode:'host',cards:[]}; this.data.penalties.cards=this.data.penalties.cards||[]; this.data.penaltyCards=Array.isArray(this.data.penaltyCards)?this.data.penaltyCards:[];
     for(const p of this.data.players||[])this.normalizePlayer(p);
   }
-  normalizePlayer(p){p.ready=!!p.ready;p.spectator=!!p.spectator;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyEdit=!!p.penaltyEdit}
-  addPlayer(m,host,spectator=false){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyEdit:false,spectator:!!spectator};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
+  normalizePlayer(p){p.ready=!!p.ready;p.spectator=!!p.spectator;p.score=Number.isFinite(p.score)?p.score:0;p.acquired=Array.isArray(p.acquired)?p.acquired:[];p.debuffs=Array.isArray(p.debuffs)?p.debuffs:[];p.cardView=p.cardView!==false;p.cardEdit=!!p.cardEdit;p.penaltyView=p.penaltyView!==false;p.penaltyEdit=!!p.penaltyEdit}
+  addPlayer(m,host,spectator=false){const p={id:m.playerId,name:(m.name||'玩家').slice(0,20),color:this.freeColor(m.color),ready:false,score:0,acquired:[],debuffs:[],cardView:true,cardEdit:false,penaltyView:true,penaltyEdit:false,spectator:!!spectator};this.data.players.push(p);if(host)this.data.hostId=p.id;this.data.permissions=this.data.permissions||{players:{}}}
   removePlayer(pid){const i=this.data.players.findIndex(p=>p.id===pid);if(i>=0)this.data.players.splice(i,1);if(this.data.hostId===pid&&this.data.players.length)this.data.hostId=this.data.players[0].id}
   freeColor(w){const used=new Set(this.data.players.map(p=>p.color));if(Number.isInteger(w)&&w>=0&&w<16&&!used.has(w))return w;for(let i=0;i<16;i++)if(!used.has(i))return i;return 0}
   canEditMain(p){return !!p&&(p.id===this.data.hostId||p.cardEdit)}
@@ -120,7 +121,6 @@ export class GameRoom {
   setSpectator(me,targetId,spectator){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以调整观战状态');
     const p=this.data.players.find(x=>x.id===targetId); if(!p)throw Error('玩家不存在');
-    if(p.id===this.data.hostId)throw Error('房主不能被移入观战区');
     p.spectator=!!spectator;
     if(p.spectator&&this.data.turnId===p.id)this.nextTurn(p.id);
     if(this.data.phase==='lobby'&&!p.spectator)p.ready=false;
@@ -130,7 +130,7 @@ export class GameRoom {
     if(me?.id!==this.data.hostId||this.data.phase!=='lobby')throw Error('只有房主可设置权限');
     this.data.permissions={...this.data.permissions,...perm};
     const q=perm.players||{};
-    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyEdit=!!q[p.id].penaltyEdit}}
+    for(const p of this.data.players){if(q[p.id]){p.cardView=!!q[p.id].cardView;p.cardEdit=!!q[p.id].cardEdit;p.penaltyView=q[p.id].penaltyView!==false;p.penaltyEdit=!!q[p.id].penaltyEdit}}
   }
   updatePenalties(me,m){
     if(this.data.phase!=='lobby')throw Error('游戏开始后不能修改惩罚牌');
