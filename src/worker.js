@@ -5,7 +5,7 @@ export class GameRoom {
   }
   async load(){ if(!this.data) this.data=await this.state.storage.get('room'); return this.data; }
   async save(){ if(this.data) await this.state.storage.put('room',this.data); }
-  async broadcast(){ for(const ws of this.sockets) this.sendState(ws); }
+  async broadcast(){ for(const ws of [...this.sockets]) this.sendState(ws); }
   sendState(ws){
     if(ws.readyState!==1||!this.data)return;
     const d=structuredClone(this.data), pid=ws.playerId;
@@ -42,7 +42,7 @@ export class GameRoom {
     return new Response('GameRoom');
   }
   onClose(ws){
-    this.sockets.delete(ws); const pid=ws.playerId; if(!pid||!this.data)return;
+    this.sockets.delete(ws); if(ws._closedHandled)return; ws._closedHandled=true; const pid=ws.playerId; if(!pid||!this.data)return;
     clearTimeout(this.disconnectTimers.get(pid));
     const t=setTimeout(async()=>{
       this.disconnectTimers.delete(pid);
@@ -162,8 +162,11 @@ export class GameRoom {
   shuffle(a){for(let i=a.length-1;i;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
   startGame(me){
     if(me?.id!==this.data.hostId)throw Error('只有房主可以开始');
+    if(this.data.phase!=='lobby')throw Error('游戏已经开始或正在结算');
     const active=this.data.players.filter(p=>!p.spectator);
-    if(active.length<1||active.some(p=>!p.ready))throw Error('还有游戏玩家没有准备');
+    if(active.length<1)throw Error('至少需要1名游戏玩家；房主可以在观战状态下主持游戏');
+    const unready=active.filter(p=>!p.ready);
+    if(unready.length)throw Error(`还有 ${unready.length} 名游戏玩家没有准备`);
     if(this.data.cards.length<2)throw Error('至少需要2张公共牌');
     this.data.phase='playing'; this.data.turnLocked=false; this.data.turnId=active[0].id; this.data.events=[];
     for(const p of this.data.players){p.score=0;p.acquired=[];p.debuffs=[];if(!p.spectator)p.ready=true}
