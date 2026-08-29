@@ -4,21 +4,21 @@ const COLORS=[
 const RULES=`<h3>普通规则</h3><p>轮到玩家时翻开两张牌。相同组成一对，<b>+1 分</b>并继续；不同则不加分并换下一位。全部配对完成后，分数最高者获胜。</p><h3>角色规则</h3><p>普通牌的一对：0 分；其他玩家所属的一对：<b>+1 分</b>；自己所属的一对：<b>-2 分</b>。分数变化按“一对牌”计算。</p><h3>鬼牌</h3><p>开启后，翻开鬼牌会使已获得卡牌的所属角色与分数按设置的顺时针或逆时针方向转动。场上只剩最后一张牌时立即结束。</p><h3>联机</h3><p>一个房间最多 6 人。房主设置卡牌和规则；玩家可选择自己的颜色，颜色不能重复。邀请链接会自动识别房间并加入。</p>`;
 $("#homeRules").innerHTML=RULES;$("#setupRules").innerHTML=RULES;
 let id=localStorage.getItem("ng_id")||crypto.randomUUID();localStorage.setItem("ng_id",id);
-let pref=JSON.parse(localStorage.getItem("ng_pref")||"null")||{name:"玩家",color:0,rule:"normal",joker:"off",direction:"cw",revealSeconds:2,cards:[{name:"猫",owner:"",count:2},{name:"狗",owner:"",count:2},{name:"鸟",owner:"",count:2},{name:"鱼",owner:"",count:2}]};
+let pref=JSON.parse(localStorage.getItem("ng_pref")||"null")||{name:"玩家",color:0,rule:"normal",joker:"off",direction:"cw",cards:[{name:"猫",owner:"",count:2},{name:"狗",owner:"",count:2},{name:"鸟",owner:"",count:2},{name:"鱼",owner:"",count:2}]};
 let ws,state,explicitLeave=false;
 const esc=x=>String(x??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
 function save(){localStorage.setItem("ng_pref",JSON.stringify(pref))}
 function send(type,data={}){if(ws?.readyState===1)ws.send(JSON.stringify({type,playerId:id,...data}))}
-function connect(c,create=false){explicitLeave=false;history.replaceState({},"",`/room/${c.toUpperCase()}`);history.replaceState({},"",`/room/${c.toUpperCase()}`);const p=location.protocol==="https:"?"wss":"ws";ws=new WebSocket(`${p}://${location.host}/room/${c}/ws`);
-ws.onopen=()=>{send(create?"create":"join",create?{code:c,settings:{rule:pref.rule,joker:pref.joker,direction:pref.direction,cards:pref.cards},name:pref.name,color:pref.color}:{name:pref.name,color:pref.color});$("#status").textContent="已连接"};
+function connect(c,create=false){explicitLeave=false;const p=location.protocol==="https:"?"wss":"ws";ws=new WebSocket(`${p}://${location.host}/room/${c}/ws`);
+ws.onopen=()=>{if(create)history.replaceState({},"",`/room/${c}`);send(create?"create":"join",create?{code:c,settings:{rule:pref.rule,joker:pref.joker,direction:pref.direction,cards:pref.cards},name:pref.name,color:pref.color}:{name:pref.name,color:pref.color});$("#status").textContent="🟢 已连接"};
 ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="state"){state=m.state;render()}if(m.type==="error"){alert(m.message)}};
-ws.onclose=()=>{$("#status").textContent="连接断开";if(!explicitLeave&&state)setTimeout(()=>{if(state&&(!ws||ws.readyState!==1))connect(state.code,false)},1200)}}
+ws.onclose=()=>{$("#status").textContent=explicitLeave?"已退出":"🟡 正在重新连接…";if(!explicitLeave&&state){clearTimeout(window._rt);window._rt=setTimeout(()=>{if(state&&(!ws||ws.readyState!==1))connect(state.code,false)},1500)}}}
 function render(){if(!state)return;$("#home").classList.add("hidden");$("#room").classList.remove("hidden");$("#roomCode").textContent=state.code;
 const me=state.players.find(p=>p.id===id),host=state.hostId===id;
 $("#players").innerHTML=state.players.map(p=>`<div class="player ${p.id===id?"me":""}"><span class="dot" style="background:${COLORS[p.color][0]}"></span><b>${esc(p.name)}</b> ${p.id===state.hostId?"👑":""}<br><small>${p.ready?"✓ 已准备":"未准备"}</small></div>`).join("");
 document.querySelectorAll(".host").forEach(x=>x.classList.toggle("hidden",!host));
 $("#setup").classList.toggle("hidden",state.phase==="playing"||state.phase==="finished");$("#game").classList.toggle("hidden",state.phase!=="playing");$("#finished").classList.toggle("hidden",state.phase!=="finished");
-$("#rule").value=state.settings.rule;$("#joker").value=state.settings.joker;$("#direction").value=state.settings.direction;$("#revealSeconds").value=state.settings.revealSeconds||2;$("#rule").disabled=$("#joker").disabled=$("#direction").disabled=$("#revealSeconds").disabled=!host;$("#editor").classList.toggle("hidden",!host);
+$("#rule").value=state.settings.rule;$("#joker").value=state.settings.joker;$("#direction").value=state.settings.direction;$("#rule").disabled=$("#joker").disabled=$("#direction").disabled=!host;$("#editor").classList.toggle("hidden",!host);
 $("#nameInput").value=me?.name||pref.name;
 $("#colors").innerHTML=COLORS.map((c,i)=>{const used=state.players.some(p=>p.id!==id&&p.color===i);return `<button class="color ${me?.color===i?"sel":""}" data-c="${i}" ${used?"disabled":""} style="background:${c[0]}" title="${c[1]}"></button>`}).join("");
 document.querySelectorAll(".color").forEach(b=>b.onclick=()=>{pref.color=+b.dataset.c;save();send("color",{color:+b.dataset.c})});
@@ -28,8 +28,8 @@ $("#cardRows").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{let card
 if(state.phase==="playing")renderGame();if(state.phase==="finished")renderFinished()}
 function ownerOptions(v){let s='<option value="">普通卡</option>';for(const p of state.players)s+=`<option value="${p.id}" ${v===p.id?"selected":""}>${esc(p.name)}</option>`;return s}
 function roleStyle(c){if(!c.owner)return"";let p=state.players.find(x=>x.id===c.owner);if(!p)return"";let col=COLORS[p.color][0];return ` style="--role:${col};--role-bg:${col}22"` }
-function renderGame(){const turnPlayer=state.players.find(p=>p.id===state.turnId);$("#turn").textContent=turnPlayer?.name||"—";$("#myTurnHint").textContent=state.turnId===id?"🎯 轮到你了！请选择两张牌":"请等待对方操作";$("#myTurnHint").className=state.turnId===id?"myTurn":"waitingTurn";$("#scores").innerHTML=state.players.map(p=>`<div class="score"><span class="dot" style="background:${COLORS[p.color][0]}"></span>${esc(p.name)}：<b>${p.score}</b></div>`).join("");
-$("#board").innerHTML=state.cards.map((c,i)=>`<button class="card ${c.revealed?"revealed":""} ${c.matched?"matched":""} ${c.revealed&&c.owner?"rolecard":""} ${c.revealed&&!c.matched?"activeTurnCard":""}" ${roleStyle(c)} data-i="${i}" ${c.revealed||c.matched||state.turnId!==id?"disabled":""}>${c.revealed?esc(c.name||"鬼牌"):"?"}</button>`).join("");
+function renderGame(){const tp=state.players.find(p=>p.id===state.turnId),myTurn=state.turnId===id;$("#turn").textContent=tp?.name||"—";$("#turnBox").classList.toggle("myTurn",myTurn);$("#scores").innerHTML=state.players.map(p=>`<div class="score"><span class="dot" style="background:${COLORS[p.color][0]}"></span>${esc(p.name)}：<b>${p.score}</b></div>`).join("");
+$("#board").innerHTML=state.cards.map((c,i)=>`<button class="card ${c.revealed?"revealed":""} ${c.matched?"matched":""} ${c.owner?"rolecard":""}" ${roleStyle(c)} data-i="${i}" ${c.revealed||c.matched||state.turnId!==id?"disabled":""}>${c.revealed?esc(c.name||"鬼牌"):"?"}</button>`).join("");
 document.querySelectorAll(".card").forEach(b=>b.onclick=()=>send("flip",{index:+b.dataset.i}))}
 function renderFinished(){let arr=[...state.players].sort((a,b)=>b.score-a.score);$("#result").innerHTML=arr.map((p,i)=>`<p><b>${i+1}. ${esc(p.name)}</b>　${p.score} 分</p>`).join("")}
 function goHome(closeRoom){if(closeRoom)send("leave");explicitLeave=true;try{ws?.close()}catch{}state=null;history.pushState({},'',"/");$("#room").classList.add("hidden");$("#home").classList.remove("hidden");$("#status").textContent="未连接"}
@@ -43,7 +43,7 @@ $("#endBtn").onclick=()=>confirm("确定结束当前游戏并返回准备阶段�
 $("#addCard").onclick=()=>send("settings",{settings:{...state.settings,cards:[...state.settings.cards,{name:"新卡牌",owner:"",count:2}]}});
 $("#batchAdd").onclick=()=>$("#batchBox").classList.toggle("hidden");$("#batchCancel").onclick=()=>$("#batchBox").classList.add("hidden");
 $("#batchConfirm").onclick=()=>{let n=Math.min(100,Math.max(1,+$("#batchCount").value||1));let cards=Array.from({length:n},(_,i)=>({name:`新卡牌 ${state.settings.cards.length+i+1}`,owner:"",count:2}));send("settings",{settings:{...state.settings,cards:[...state.settings.cards,...cards]}});$("#batchBox").classList.add("hidden")};
-for(const [sel,key] of [["#rule","rule"],["#joker","joker"],["#direction","direction"],["#revealSeconds","revealSeconds"]])$(sel).onchange=e=>{pref[key]=key==="revealSeconds"?Math.max(1,Math.min(10,+e.target.value||2)):e.target.value;save();send("settings",{settings:{...state.settings,[key]:pref[key]}})};
+for(const [sel,key] of [["#rule","rule"],["#joker","joker"],["#direction","direction"]])$(sel).onchange=e=>{pref[key]=e.target.value;save();send("settings",{settings:{...state.settings,[key]:e.target.value}})};
 $("#rulesBtn").onclick=()=>{$("#modalText").innerHTML=RULES;$("#modal").classList.remove("hidden")};$("#closeModal").onclick=()=>$("#modal").classList.add("hidden");
 let path=location.pathname.match(/^\/room\/([^/]+)\/?$/);if(path){connect(path[1].toUpperCase(),false)}
 })();

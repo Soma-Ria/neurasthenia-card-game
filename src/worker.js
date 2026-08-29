@@ -3,9 +3,15 @@ export class GameRoom {
  async load(){if(!this.data)this.data=await this.state.storage.get("room");return this.data}
  async save(){await this.state.storage.put("room",this.data)}
  broadcast(){const m=JSON.stringify({type:"state",state:this.data});for(const w of this.sockets)if(w.readyState===1)w.send(m)}
- async fetch(req){const u=new URL(req.url);if(u.pathname.endsWith("/ws")&&req.headers.get("Upgrade")==="websocket"){const pair=new WebSocketPair(),[client,server]=Object.values(pair);server.accept();this.sockets.add(server);server.addEventListener("message",e=>this.handle(server,JSON.parse(e.data)));server.addEventListener("close",()=>this.sockets.delete(server));return new Response(null,{status:101,webSocket:client})}return new Response("GameRoom")}
+ async fetch(req){const u=new URL(req.url);if(u.pathname.endsWith("/ws")&&req.headers.get("Upgrade")==="websocket"){const pair=new WebSocketPair(),[client,server]=Object.values(pair);server.accept();this.sockets.add(server);server.addEventListener("message",e=>this.handle(server,JSON.parse(e.data)));server.addEventListener("close",()=>this.onClose(server));server.addEventListener("error",()=>this.onClose(server));return new Response(null,{status:101,webSocket:client})}return new Response("GameRoom")}
+ onClose(ws){
+  this.sockets.delete(ws); const pid=ws.playerId; if(!pid||!this.data)return;
+  clearTimeout(this.disconnectTimers.get(pid));
+  const t=setTimeout(async()=>{this.disconnectTimers.delete(pid);if(![...this.sockets].some(s=>s.playerId===pid)){this.removePlayer(pid);await this.save();this.broadcast()}},30000);
+  this.disconnectTimers.set(pid,t);
+ }
  async handle(ws,m){try{ws.playerId=m.playerId;
-  if(m.type==="create"){if(await this.load())throw Error("房间已存在");this.data={code:m.code,hostId:m.playerId,phase:"lobby",turnId:null,players:[],settings:{...m.settings,revealSeconds:Math.max(1,Math.min(10,+m.settings?.revealSeconds||2))},cards:[]};this.rebuild();this.addPlayer(m,true)}
+  if(m.type==="create"){if(await this.load())throw Error("房间已存在");this.data={code:m.code,hostId:m.playerId,phase:"lobby",turnId:null,players:[],settings:m.settings,cards:[]};this.rebuild();this.addPlayer(m,true)}
   if(!this.data)this.data=await this.load();if(!this.data)throw Error("房间不存在，请确认邀请链接或房间号");
   let me=this.data.players.find(p=>p.id===m.playerId);
   if(m.type==="join"){clearTimeout(this.disconnectTimers.get(m.playerId));this.disconnectTimers.delete(m.playerId);if(!me){if(this.data.phase!=="lobby")throw Error("游戏已经开始，暂时不能加入");if(this.data.players.length>=6)throw Error("房间已满（最多6人）");this.addPlayer(m,false)}}
@@ -14,7 +20,7 @@ export class GameRoom {
   if(m.type==="name"){if(!me)throw Error("请先加入房间");me.name=(m.name||"玩家").slice(0,20)}
   if(m.type==="color"){if(!me)throw Error("请先加入房间");if(!Number.isInteger(m.color)||m.color<0||m.color>15)throw Error("无效颜色");if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error("该颜色已被其他玩家使用");me.color=m.color}
   if(m.type==="ready"){if(me)me.ready=!me.ready}
-  if(m.type==="settings"){if(me?.id!==this.data.hostId||this.data.phase!=="lobby")throw Error("只有房主可修改准备阶段设置");this.data.settings={...this.data.settings,...m.settings,revealSeconds:Math.max(1,Math.min(10,+m.settings?.revealSeconds||this.data.settings.revealSeconds||2))};this.rebuild()}
+  if(m.type==="settings"){if(me?.id!==this.data.hostId||this.data.phase!=="lobby")throw Error("只有房主可修改准备阶段设置");this.data.settings={...this.data.settings,...m.settings};this.rebuild()}
   if(m.type==="start"){if(me?.id!==this.data.hostId)throw Error("只有房主可以开始");if(this.data.players.some(p=>!p.ready))throw Error("还有玩家没有准备");if(this.data.cards.length<2)throw Error("至少需要2张卡牌");this.data.phase="playing";this.data.players.forEach(p=>p.score=0);this.data.cards.forEach(c=>{c.revealed=false;c.matched=false});this.shuffle(this.data.cards);this.data.turnId=this.data.players[0].id}
   if(m.type==="end"){if(me?.id!==this.data.hostId)throw Error("只有房主可以结束");this.toLobby()}
   if(m.type==="flip")await this.flip(m.index,me?.id)
@@ -29,7 +35,7 @@ export class GameRoom {
   if(c.name==="鬼牌"&&this.data.settings.joker==="on"){this.rotate(pid);this.checkEnd();return}
   let open=this.data.cards.filter(x=>x.revealed&&!x.matched);if(open.length<2){this.checkEnd();return}
   let[a,b]=open.slice(-2);if(a.group===b.group){a.matched=b.matched=true;let p=this.data.players.find(x=>x.id===pid);if(this.data.settings.rule==="normal")p.score+=1;else if(a.owner)p.score+=a.owner===pid?-2:1;this.checkEnd()}
-  else{setTimeout(async()=>{if(this.data?.phase!=="playing")return;a.revealed=b.revealed=false;let n=this.data.players.findIndex(x=>x.id===pid);this.data.turnId=this.data.players[(n+1)%this.data.players.length].id;await this.save();this.broadcast()},(Math.max(1,Math.min(10,+this.data.settings.revealSeconds||2)))*1000)}
+  else{setTimeout(async()=>{if(this.data?.phase!=="playing")return;a.revealed=b.revealed=false;let n=this.data.players.findIndex(x=>x.id===pid);this.data.turnId=this.data.players[(n+1)%this.data.players.length].id;await this.save();this.broadcast()},650)}
  }
  checkEnd(){if(this.data.cards.filter(x=>!x.matched).length<=1){this.data.phase="finished";this.data.turnId=null}}
  rotate(pid){const ps=this.data.players;if(ps.length<2)return;const dir=this.data.settings.direction==="cw"?1:-1,idx=ps.findIndex(p=>p.id===pid),ids=ps.map(p=>p.id),scores=ps.map(p=>p.score);ps.forEach((p,k)=>p.score=scores[(k-dir+ps.length)%ps.length]);this.data.cards.forEach(c=>{if(c.owner){let k=ids.indexOf(c.owner);if(k>=0)c.owner=ids[(k+dir+ps.length)%ps.length]}})}
