@@ -11,7 +11,7 @@ export class GameRoom {
   this.disconnectTimers.set(pid,t);
  }
  async handle(ws,m){try{ws.playerId=m.playerId;
-  if(m.type==="create"){if(await this.load())throw Error("房间已存在");this.data={code:m.code,hostId:m.playerId,phase:"lobby",turnId:null,players:[],settings:m.settings,cards:[]};this.rebuild();this.addPlayer(m,true)}
+  if(m.type==="create"){if(await this.load())throw Error("房间已存在");this.data={code:m.code,hostId:m.playerId,phase:"lobby",turnId:null,turnLocked:false,players:[],settings:{...m.settings,failTime:+m.settings.failTime||2},cards:[]};this.rebuild();this.addPlayer(m,true)}
   if(!this.data)this.data=await this.load();if(!this.data)throw Error("房间不存在，请确认邀请链接或房间号");
   let me=this.data.players.find(p=>p.id===m.playerId);
   if(m.type==="join"){clearTimeout(this.disconnectTimers.get(m.playerId));this.disconnectTimers.delete(m.playerId);if(!me){if(this.data.phase!=="lobby")throw Error("游戏已经开始，暂时不能加入");if(this.data.players.length>=6)throw Error("房间已满（最多6人）");this.addPlayer(m,false)}}
@@ -20,8 +20,8 @@ export class GameRoom {
   if(m.type==="name"){if(!me)throw Error("请先加入房间");me.name=(m.name||"玩家").slice(0,20)}
   if(m.type==="color"){if(!me)throw Error("请先加入房间");if(!Number.isInteger(m.color)||m.color<0||m.color>15)throw Error("无效颜色");if(this.data.players.some(p=>p.id!==me.id&&p.color===m.color))throw Error("该颜色已被其他玩家使用");me.color=m.color}
   if(m.type==="ready"){if(me)me.ready=!me.ready}
-  if(m.type==="settings"){if(me?.id!==this.data.hostId||this.data.phase!=="lobby")throw Error("只有房主可修改准备阶段设置");this.data.settings={...this.data.settings,...m.settings};this.rebuild()}
-  if(m.type==="start"){if(me?.id!==this.data.hostId)throw Error("只有房主可以开始");if(this.data.players.some(p=>!p.ready))throw Error("还有玩家没有准备");if(this.data.cards.length<2)throw Error("至少需要2张卡牌");this.data.phase="playing";this.data.players.forEach(p=>p.score=0);this.data.cards.forEach(c=>{c.revealed=false;c.matched=false});this.shuffle(this.data.cards);this.data.turnId=this.data.players[0].id}
+  if(m.type==="settings"){if(me?.id!==this.data.hostId||this.data.phase!=="lobby")throw Error("只有房主可修改准备阶段设置");this.data.settings={...this.data.settings,...m.settings,failTime:Math.min(10,Math.max(1,+({...this.data.settings,...m.settings}).failTime||2))};this.rebuild()}
+  if(m.type==="start"){if(me?.id!==this.data.hostId)throw Error("只有房主可以开始");if(this.data.players.some(p=>!p.ready))throw Error("还有玩家没有准备");if(this.data.cards.length<2)throw Error("至少需要2张卡牌");this.data.phase="playing";this.data.turnLocked=false;this.data.players.forEach(p=>p.score=0);this.data.cards.forEach(c=>{c.revealed=false;c.matched=false});this.shuffle(this.data.cards);this.data.turnId=this.data.players[0].id}
   if(m.type==="end"){if(me?.id!==this.data.hostId)throw Error("只有房主可以结束");this.toLobby()}
   if(m.type==="flip")await this.flip(m.index,me?.id)
   await this.save();this.broadcast()
@@ -30,12 +30,14 @@ export class GameRoom {
  freeColor(w){let used=new Set(this.data.players.map(p=>p.color));if(Number.isInteger(w)&&w>=0&&w<16&&!used.has(w))return w;for(let i=0;i<16;i++)if(!used.has(i))return i;return 0}
  rebuild(){this.data.cards=this.data.settings.cards.flatMap((c,g)=>Array.from({length:Math.max(1,+c.count||1)},()=>({id:crypto.randomUUID(),group:g,name:c.name,owner:c.owner||"",revealed:false,matched:false})))}
  shuffle(a){for(let i=a.length-1;i;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
- toLobby(){this.data.phase="lobby";this.data.turnId=null;this.data.players.forEach(p=>{p.ready=false;p.score=0});this.rebuild()}
- async flip(i,pid){if(this.data.phase!=="playing"||this.data.turnId!==pid)throw Error("还没轮到你");let c=this.data.cards[i];if(!c||c.matched||c.revealed)throw Error("这张牌不能翻开");c.revealed=true;
-  if(c.name==="鬼牌"&&this.data.settings.joker==="on"){this.rotate(pid);this.checkEnd();return}
+ toLobby(){this.data.phase="lobby";this.data.turnId=null;this.data.turnLocked=false;this.data.players.forEach(p=>{p.ready=false;p.score=0});this.rebuild()}
+ async flip(i,pid){if(this.data.phase!=="playing"||this.data.turnId!==pid)throw Error("还没轮到你");if(this.data.turnLocked)throw Error("请等待当前两张牌处理完成");let c=this.data.cards[i];if(!c||c.matched||c.revealed)throw Error("这张牌不能翻开");c.revealed=true;
+  if(c.name==="鬼牌"&&this.data.settings.joker==="on"){this.data.turnLocked=true;this.rotate(pid);this.shuffle(this.data.cards);this.data.cards.forEach(x=>{if(!x.matched)x.revealed=false});this.data.turnLocked=false;this.checkEnd();return}
   let open=this.data.cards.filter(x=>x.revealed&&!x.matched);if(open.length<2){this.checkEnd();return}
-  let[a,b]=open.slice(-2);if(a.group===b.group){a.matched=b.matched=true;let p=this.data.players.find(x=>x.id===pid);if(this.data.settings.rule==="normal")p.score+=1;else if(a.owner)p.score+=a.owner===pid?-2:1;this.checkEnd()}
-  else{setTimeout(async()=>{if(this.data?.phase!=="playing")return;a.revealed=b.revealed=false;let n=this.data.players.findIndex(x=>x.id===pid);this.data.turnId=this.data.players[(n+1)%this.data.players.length].id;await this.save();this.broadcast()},650)}
+  let[a,b]=open.slice(-2);this.data.turnLocked=true;
+  if(a.group===b.group){a.matched=b.matched=true;let p=this.data.players.find(x=>x.id===pid);if(this.data.settings.rule==="normal")p.score+=1;else if(a.owner)p.score+=a.owner===pid?-2:1;this.data.turnLocked=false;this.checkEnd();return}
+  const wait=Math.min(10000,Math.max(1000,(+this.data.settings.failTime||2)*1000));
+  setTimeout(async()=>{if(this.data?.phase!=="playing")return;a.revealed=b.revealed=false;this.data.turnLocked=false;let n=this.data.players.findIndex(x=>x.id===pid);if(n>=0&&this.data.players.length)this.data.turnId=this.data.players[(n+1)%this.data.players.length].id;await this.save();this.broadcast()},wait)
  }
  checkEnd(){if(this.data.cards.filter(x=>!x.matched).length<=1){this.data.phase="finished";this.data.turnId=null}}
  rotate(pid){const ps=this.data.players;if(ps.length<2)return;const dir=this.data.settings.direction==="cw"?1:-1,idx=ps.findIndex(p=>p.id===pid),ids=ps.map(p=>p.id),scores=ps.map(p=>p.score);ps.forEach((p,k)=>p.score=scores[(k-dir+ps.length)%ps.length]);this.data.cards.forEach(c=>{if(c.owner){let k=ids.indexOf(c.owner);if(k>=0)c.owner=ids[(k+dir+ps.length)%ps.length]}})}
