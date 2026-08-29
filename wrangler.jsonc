@@ -11,7 +11,7 @@
     "bindings": [
       {
         "name": "ROOM",
-        "class_name": "Room"
+        "class_name": "GameRoom"
       }
     ]
   },
@@ -19,7 +19,7 @@
     {
       "tag": "v1",
       "new_sqlite_classes": [
-        "Room"
+        "GameRoom"
       ]
     }
   ]
