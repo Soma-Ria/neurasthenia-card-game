@@ -23,7 +23,7 @@ export class GameRoom {
   if(m.type==="settings"){if(me?.id!==this.data.hostId||this.data.phase!=="lobby")throw Error("只有房主可修改准备阶段设置");this.data.settings={...this.data.settings,...m.settings,failTime:Math.min(10,Math.max(1,+({...this.data.settings,...m.settings}).failTime||2)),jokerCount:Math.min(4,Math.max(1,+({...this.data.settings,...m.settings}).jokerCount||1))};this.rebuild()}
   if(m.type==="start"){if(me?.id!==this.data.hostId)throw Error("只有房主可以开始");if(this.data.players.some(p=>!p.ready))throw Error("还有玩家没有准备");if(this.data.cards.length<2)throw Error("至少需要2张卡牌");this.data.phase="playing";this.data.turnLocked=false;this.data.players.forEach(p=>p.score=0);this.data.cards.forEach(c=>{c.revealed=false;c.matched=false});this.shuffle(this.data.cards);this.data.turnId=this.data.players[0].id}
   if(m.type==="end"){if(me?.id!==this.data.hostId)throw Error("只有房主可以结束");this.toLobby()}
-  if(m.type==="flip")await this.flip(m.index,me?.id)
+  if(m.type==="flip"){const event=await this.flip(m.index,me?.id);if(event){const msg=JSON.stringify(event);for(const w of this.sockets)if(w.readyState===1)w.send(msg)}}
   await this.save();this.broadcast()
  }catch(e){try{ws.send(JSON.stringify({type:"error",message:e.message||String(e)}))}catch{}}}
  addPlayer(m,host){let color=this.freeColor(m.color),p={id:m.playerId,name:(m.name||"玩家").slice(0,20),color,ready:false,score:0};this.data.players.push(p);if(host)this.data.hostId=p.id}
@@ -32,7 +32,7 @@ export class GameRoom {
  shuffle(a){for(let i=a.length-1;i;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}}
  toLobby(){this.data.phase="lobby";this.data.turnId=null;this.data.turnLocked=false;this.data.players.forEach(p=>{p.ready=false;p.score=0});this.rebuild()}
  async flip(i,pid){if(this.data.phase!=="playing"||this.data.turnId!==pid)throw Error("还没轮到你");if(this.data.turnLocked)throw Error("请等待当前两张牌处理完成");let c=this.data.cards[i];if(!c||c.matched||c.revealed)throw Error("这张牌不能翻开");c.revealed=true;
-  if(c.joker&&this.data.settings.joker==="on"){this.data.turnLocked=true;this.rotate(pid);this.shuffle(this.data.cards);this.data.cards.forEach(x=>{if(!x.matched)x.revealed=false});this.data.turnLocked=false;this.checkEnd();return}
+  if(c.joker&&this.data.settings.joker==="on"){this.data.turnLocked=true;this.rotate(pid);this.shuffle(this.data.cards);this.data.cards.forEach(x=>{if(!x.matched)x.revealed=false});this.data.turnLocked=false;this.checkEnd();return {type:"joker",direction:this.data.settings.direction}}
   let open=this.data.cards.filter(x=>x.revealed&&!x.matched);if(open.length<2){this.checkEnd();return}
   let[a,b]=open.slice(-2);this.data.turnLocked=true;
   if(a.group===b.group){a.matched=b.matched=true;let p=this.data.players.find(x=>x.id===pid);if(this.data.settings.rule==="normal")p.score+=1;else if(a.owner)p.score+=a.owner===pid?-2:1;this.data.turnLocked=false;this.checkEnd();return}
