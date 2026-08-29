@@ -1,6 +1,6 @@
 {
   "name": "neurasthenia-card-game",
-  "version": "0.5.1",
+  "version": "0.5.7",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
